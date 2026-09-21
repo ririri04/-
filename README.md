@@ -1,21 +1,26 @@
 # note-auto-poster
 
-note.com に投稿した記事の画像から、AI(Claude)が「SNS投稿に最も適した1枚」を自動で選び、
+note.com に投稿した記事の画像から、AI(Claude)がSNS投稿に適した写真を自動で選び、
 X (Twitter) と Instagram に自動投稿するツールです。
 
 ## 仕組み
 
 1. **NoteClient** — note.com の公開API(非公式)から、指定ユーザーの最新記事一覧と
-   本文中の画像・アイキャッチ画像を取得します。
+   本文中の画像・アイキャッチ画像を取得します。直近の記事で使える写真が尽きた場合は、
+   自動でより過去の記事までさかのぼって候補を探します。
 2. **ImageSelector** — 取得した画像候補と記事タイトル/概要を Claude (Vision) に渡し、
-   視覚的な魅力・内容との関連性・ネタバレ回避などの観点で最も適した画像を1枚選定し、
-   X用・Instagram用のキャプション(日本語、ハッシュタグ付き)も生成します。
+   視覚的な魅力・内容との関連性・ネタバレ回避などの観点で写真を選定します。
    `ANTHROPIC_API_KEY` 未設定の場合は先頭の画像を使う簡易フォールバックで動作します。
-3. **XPoster** / **InstagramPoster** — 選定した画像とキャプションをそれぞれのAPIで投稿します。
-4. **PostedState** — 投稿済みの記事キーを `state.json` に記録し、同じ記事を二重投稿しません。
+3. **XPoster** — Xには1枚、固定のキャプションで投稿します(`src/note_auto_poster/captions.py`)。
+4. **InstagramPoster** — Instagramには同一記事から複数枚(デフォルト5枚)をカルーセル投稿します。
+5. **PostedState** — **投稿済みの画像URL**を `state.json` に記録し、同じ写真は二度と使いません
+   (記事自体は再利用OK)。また、X/Instagramそれぞれで「前回使った記事」を記録し、
+   できるだけ連続で同じ記事にならないようにします。
+6. X用とInstagram用は、同じ実行の中で必ず別の記事から選ばれます。
 
-`note_auto_poster run` を定期実行(cron や GitHub Actions)することで、新しい記事が
-公開されるたびに自動でSNS投稿が行われます。
+`note_auto_poster run` を定期実行(cron や GitHub Actions)することで、1日数回自動で
+SNS投稿が行われます。キャプション文言は `src/note_auto_poster/captions.py` の
+`X_CAPTION` / `INSTAGRAM_CAPTION` を直接編集して固定しています。
 
 ## セットアップ
 
@@ -43,8 +48,8 @@ cp .env.example .env
 | `TWITTER_API_KEY` 他 | X Developer Portal で発行する OAuth1.0a の4つのキー(Read/Write権限必須) |
 | `IG_ACCESS_TOKEN` / `IG_USER_ID` | Instagram API (Instagramログイン)用。Instagramプロアカウントのみで取得可能(Facebookページ連携は不要) |
 | `POST_TO_X` / `POST_TO_INSTAGRAM` | 各投稿先の有効/無効 |
-| `MAX_ARTICLES_PER_RUN` | 1回の実行で投稿する記事数の上限 |
-| `STATE_FILE` | 投稿済み記事を記録するJSONファイルのパス |
+| `INSTAGRAM_IMAGE_COUNT` | Instagramに載せる画像枚数(1記事から選ぶ枚数。デフォルト5) |
+| `STATE_FILE` | 投稿済み画像URLを記録するJSONファイルのパス |
 | `DRY_RUN` | `true` で実際には投稿せず選定結果のみログ表示 |
 
 X の認証情報は https://developer.twitter.com/en/portal/dashboard でアプリを作成し、
@@ -86,9 +91,15 @@ PYTHONPATH=src python -m note_auto_poster.cli run
 
 ### 5. 自動実行(GitHub Actions)
 
-`.github/workflows/auto-post.yml` が6時間おきに `run` を実行します。リポジトリの
-Settings → Secrets and variables → Actions に、上記の環境変数と同名のシークレットを
-登録してください。実行のたびに `state.json` をコミットして投稿済み状態を永続化します。
+`.github/workflows/auto-post.yml` が毎日 **6:00 と 20:00(日本時間)** の1日2回 `run` を
+実行します。リポジトリの Settings → Secrets and variables → Actions に、上記の環境変数と
+同名のシークレットを登録してください。実行のたびに `state.json` をコミットして
+投稿済み状態を永続化します。
+
+### キャプションを変更したい場合
+
+`src/note_auto_poster/captions.py` の `X_CAPTION` / `INSTAGRAM_CAPTION` を直接編集して
+コミットしてください(AIによる自動生成ではなく固定文言です)。
 
 ## テスト
 
@@ -103,5 +114,5 @@ pytest
 - note.com の非公式APIを利用しているため、note側の仕様変更で動作しなくなる可能性があります。
 - 自分が投稿した記事の画像のみを対象にすることを想定しています。他人の記事の画像を無断で
   SNSに転載しないでください。
-- X / Instagram それぞれの利用規約・APIレート制限に従って `MAX_ARTICLES_PER_RUN` や
-  実行間隔を調整してください。
+- X APIは投稿(書き込み)に有料プランへの加入が必要な場合があります。詳細はX Developer Portalで
+  ご確認ください。

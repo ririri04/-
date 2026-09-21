@@ -3,25 +3,27 @@ import pytest
 from note_auto_poster.image_selector import ImageSelector, _parse_json
 
 
-def test_select_returns_none_when_no_candidates():
+def test_select_returns_empty_when_no_candidates():
     selector = ImageSelector(api_key=None)
-    assert selector.select("title", "excerpt", [], "https://note.com/x/n/1") is None
+    assert selector.select("title", "excerpt", [], "https://note.com/x/n/1", count=1) == []
 
 
 def test_fallback_used_when_no_api_key():
     selector = ImageSelector(api_key=None)
     result = selector.select(
-        "title", "excerpt", ["https://example.com/a.png", "https://example.com/b.png"], "https://note.com/x/n/1"
+        "title",
+        "excerpt",
+        ["https://example.com/a.png", "https://example.com/b.png", "https://example.com/c.png"],
+        "https://note.com/x/n/1",
+        count=2,
     )
-    assert result is not None
-    assert result.image_url == "https://example.com/a.png"
-    assert result.caption_x == "title"
+    assert result == ["https://example.com/a.png", "https://example.com/b.png"]
 
 
 def test_parse_json_extracts_embedded_object():
-    text = 'ここに説明があります {"selected_index": 1, "reason": "ok"} 以上'
+    text = 'ここに説明があります {"selected_indices": [2, 0], "reason": "ok"} 以上'
     parsed = _parse_json(text)
-    assert parsed["selected_index"] == 1
+    assert parsed["selected_indices"] == [2, 0]
     assert parsed["reason"] == "ok"
 
 

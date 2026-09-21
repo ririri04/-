@@ -33,7 +33,7 @@ class Config:
 
     post_to_x: bool
     post_to_instagram: bool
-    max_articles_per_run: int
+    instagram_image_count: int
     state_file: str
     dry_run: bool
 
@@ -55,7 +55,7 @@ class Config:
             ig_user_id=os.getenv("IG_USER_ID") or None,
             post_to_x=_bool_env("POST_TO_X", True),
             post_to_instagram=_bool_env("POST_TO_INSTAGRAM", True),
-            max_articles_per_run=int(os.getenv("MAX_ARTICLES_PER_RUN", "1")),
+            instagram_image_count=int(os.getenv("INSTAGRAM_IMAGE_COUNT", "5")),
             state_file=os.getenv("STATE_FILE", "state.json"),
             dry_run=_bool_env("DRY_RUN", False),
         )

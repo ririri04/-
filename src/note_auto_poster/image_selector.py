@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import json
 import logging
-from dataclasses import dataclass
 from io import BytesIO
 from typing import List, Optional
 
@@ -13,36 +12,25 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 MAX_IMAGE_EDGE = 1024
-MAX_CANDIDATES = 6
+MAX_CANDIDATES = 10
 
 SELECTION_PROMPT_TEMPLATE = (
-    "あなたはnote記事からSNS(X/Instagram)投稿用の画像を選ぶ担当者です。\n"
+    "あなたはnote記事からSNS投稿用の画像を選ぶ担当者です。\n"
     "記事タイトル: {title}\n"
     "記事概要: {excerpt}\n"
     "記事URL: {article_url}\n\n"
-    "以下の画像候補から、SNS投稿に最も適した1枚を選んでください。"
+    "以下の画像候補の中から、SNS投稿に最も適した画像を{count}枚選んでください。"
     "判断基準: 視覚的な魅力、記事内容との関連性、文字が小さすぎたり読みにくい"
     "スクリーンショットではないこと、結論部分のネタバレにならないこと。\n"
     "各画像には0始まりのインデックス番号を付けています。\n"
     "回答は次のJSON形式のみで返してください(前置きや説明文は不要):\n"
-    '{{"selected_index": <int>, "reason": "<選定理由>", '
-    '"caption_x": "<X投稿用の日本語キャプション。140字以内、ハッシュタグ含む>", '
-    '"caption_instagram": "<Instagram投稿用の日本語キャプション。ハッシュタグ含む>"}}'
+    '{{"selected_indices": [<おすすめ順に並べた最大{count}個のint>], "reason": "<選定理由>"}}'
 )
 
 
-@dataclass
-class Selection:
-    image_url: str
-    reason: str
-    caption_x: str
-    caption_instagram: str
-
-
 class ImageSelector:
-    """Picks the best social-media image for an article using Claude vision.
-
-    Falls back to a simple heuristic (first candidate) when no API key is
+    """Picks the best `count` social-media images for an article using Claude
+    vision. Falls back to the first `count` candidates when no API key is
     configured or the model call fails, so the pipeline keeps working even
     without AI selection configured.
     """
@@ -67,12 +55,13 @@ class ImageSelector:
         excerpt: str,
         image_urls: List[str],
         article_url: str,
-    ) -> Optional[Selection]:
+        count: int = 1,
+    ) -> List[str]:
         candidates = image_urls[:MAX_CANDIDATES]
         if not candidates:
-            return None
+            return []
         if self._client is None:
-            return self._fallback(candidates, title)
+            return candidates[:count]
 
         downloaded = [
             (url, data)
@@ -80,28 +69,23 @@ class ImageSelector:
             if data is not None
         ]
         if not downloaded:
-            return None
+            return []
 
         try:
-            parsed = self._ask_claude(title, excerpt, article_url, downloaded)
-            index = int(parsed["selected_index"])
-            url, _ = downloaded[index]
-            return Selection(
-                image_url=url,
-                reason=parsed.get("reason", ""),
-                caption_x=parsed.get("caption_x") or title,
-                caption_instagram=parsed.get("caption_instagram") or title,
-            )
+            parsed = self._ask_claude(title, excerpt, article_url, downloaded, count)
+            indices = parsed["selected_indices"][:count]
+            urls = [downloaded[i][0] for i in indices if isinstance(i, int) and 0 <= i < len(downloaded)]
+            return urls or [u for u, _ in downloaded[:count]]
         except Exception:
             logger.exception("AI image selection failed, falling back to heuristic")
-            return self._fallback(candidates, title)
+            return [u for u, _ in downloaded[:count]]
 
-    def _ask_claude(self, title, excerpt, article_url, downloaded) -> dict:
+    def _ask_claude(self, title, excerpt, article_url, downloaded, count) -> dict:
         content: list = [
             {
                 "type": "text",
                 "text": SELECTION_PROMPT_TEMPLATE.format(
-                    title=title, excerpt=excerpt, article_url=article_url
+                    title=title, excerpt=excerpt, article_url=article_url, count=count
                 ),
             }
         ]
@@ -136,15 +120,6 @@ class ImageSelector:
         except Exception:
             logger.exception("failed to download/resize image %s", url)
             return None
-
-    @staticmethod
-    def _fallback(candidates: List[str], title: str = "") -> Selection:
-        return Selection(
-            image_url=candidates[0],
-            reason="AI selection unavailable; used the first candidate image.",
-            caption_x=title,
-            caption_instagram=title,
-        )
 
 
 def _parse_json(text: str) -> dict:

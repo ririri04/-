@@ -39,12 +39,43 @@ class InstagramPoster:
         self._wait_until_ready(creation_id)
         return self._publish(creation_id)
 
-    def _create_container(self, image_url: str, caption: str) -> str:
+    def post_carousel(self, image_urls: list[str], caption: str) -> str:
+        if len(image_urls) < 2:
+            return self.post_image(image_urls[0], caption)
+
+        child_ids = []
+        for url in image_urls:
+            child_id = self._create_container(url, caption=None, is_carousel_item=True)
+            self._wait_until_ready(child_id)
+            child_ids.append(child_id)
+
+        creation_id = self._create_carousel_container(child_ids, caption)
+        self._wait_until_ready(creation_id)
+        return self._publish(creation_id)
+
+    def _create_container(
+        self, image_url: str, caption: Optional[str], is_carousel_item: bool = False
+    ) -> str:
+        url = f"{GRAPH_API_BASE}/{self.credentials.ig_user_id}/media"
+        data = {
+            "image_url": image_url,
+            "access_token": self.credentials.access_token,
+        }
+        if caption is not None:
+            data["caption"] = caption
+        if is_carousel_item:
+            data["is_carousel_item"] = "true"
+        resp = self.session.post(url, data=data, timeout=30)
+        resp.raise_for_status()
+        return resp.json()["id"]
+
+    def _create_carousel_container(self, child_ids: list[str], caption: str) -> str:
         url = f"{GRAPH_API_BASE}/{self.credentials.ig_user_id}/media"
         resp = self.session.post(
             url,
             data={
-                "image_url": image_url,
+                "media_type": "CAROUSEL",
+                "children": ",".join(child_ids),
                 "caption": caption,
                 "access_token": self.credentials.access_token,
             },
