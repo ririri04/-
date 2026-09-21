@@ -9,7 +9,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-GRAPH_API_BASE = "https://graph.facebook.com/v19.0"
+GRAPH_API_BASE = "https://graph.instagram.com/v21.0"
 PUBLISH_POLL_ATTEMPTS = 10
 PUBLISH_POLL_DELAY_SECONDS = 3
 
@@ -21,11 +21,13 @@ class InstagramCredentials:
 
 
 class InstagramPoster:
-    """Posts an image + caption via the Instagram Graph API (content publishing).
+    """Posts an image + caption via the Instagram API with Instagram Login
+    (content publishing on graph.instagram.com).
 
-    Requires an Instagram professional account linked to a Facebook Page.
-    The image is referenced by URL rather than uploaded directly, so it must
-    already be publicly reachable -- note.com's asset CDN URLs qualify.
+    Uses an Instagram-scoped access token obtained through Instagram Business
+    Login, so no linked Facebook Page is required. The image is referenced by
+    URL rather than uploaded directly, so it must already be publicly
+    reachable -- note.com's asset CDN URLs qualify.
     """
 
     def __init__(self, credentials: InstagramCredentials, session: Optional[requests.Session] = None):

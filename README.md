@@ -41,7 +41,7 @@ cp .env.example .env
 | `ANTHROPIC_API_KEY` | Claude API キー。未設定でも動作するが画像選定は簡易フォールバックになる |
 | `ANTHROPIC_MODEL` | 画像選定に使うモデル(デフォルト `claude-sonnet-5`) |
 | `TWITTER_API_KEY` 他 | X Developer Portal で発行する OAuth1.0a の4つのキー(Read/Write権限必須) |
-| `IG_ACCESS_TOKEN` / `IG_USER_ID` | Instagram Graph API 用。Instagramプロアカウント + 連携したFacebookページが必要 |
+| `IG_ACCESS_TOKEN` / `IG_USER_ID` | Instagram API (Instagramログイン)用。Instagramプロアカウントのみで取得可能(Facebookページ連携は不要) |
 | `POST_TO_X` / `POST_TO_INSTAGRAM` | 各投稿先の有効/無効 |
 | `MAX_ARTICLES_PER_RUN` | 1回の実行で投稿する記事数の上限 |
 | `STATE_FILE` | 投稿済み記事を記録するJSONファイルのパス |
@@ -50,10 +50,23 @@ cp .env.example .env
 X の認証情報は https://developer.twitter.com/en/portal/dashboard でアプリを作成し、
 「Read and Write」権限の Access Token / Secret を発行してください。
 
-Instagram は https://developers.facebook.com/ でMetaアプリを作成し、Instagramプロアカウントを
-連携したFacebookページの長期アクセストークンを発行してください。Graph APIの `image_url` は
-公開URLである必要がありますが、note の画像は元々公開CDN上にあるためダウンロード/再アップロード
-なしでそのまま利用します。
+Instagram は https://developers.facebook.com/ でMetaアプリを作成し、「Instagram API」ユースケース
+(Instagramビジネスログイン)を追加してください。Facebookページの連携は不要です。
+
+1. アプリの「役割」タブで自分のInstagramアカウントを「Instagramテスター」として追加し、
+   Instagramアプリ側で招待を承認する
+2. アプリの「Instagram API」設定画面の「アクセストークンを生成する」からアクセストークンを取得
+3. 取得したトークンで以下を実行し、`user_id` を確認する
+
+   ```bash
+   curl -s "https://graph.instagram.com/v21.0/me?fields=user_id,username&access_token=<取得したトークン>"
+   ```
+
+   返ってきた `user_id` が `IG_USER_ID`、使ったトークンが `IG_ACCESS_TOKEN` です
+
+投稿処理は `graph.instagram.com` の Content Publishing API を使います。`image_url` は公開URLである
+必要がありますが、note の画像は元々公開CDN上にあるためダウンロード/再アップロードなしでそのまま
+利用します。
 
 ### 3. 動作確認
 
