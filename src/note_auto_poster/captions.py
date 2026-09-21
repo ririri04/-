@@ -6,17 +6,16 @@ trick to keep the vertical spacing before the visible text.
 """
 
 INSTAGRAM_CAPTION = (
-    ".\n.\n.\n.\n.\n．\n.\n"
-    "Photo by \n"
+    ".\n.\n.\n.\n.\n.\n.\n.\n"
+    "📷\n"
     "#福岡撮影会 #被写体モデル\n"
     "#ポートレート #portrait\n"
-    "#香乃ほのか"
+    "#香乃ほのか @b_palette_promotion"
 )
 
 X_CAPTION = (
     ".\n.\n.\n.\n.\n.\n.\n.\n.\n"
-    "Photo by\n"
     "#福岡撮影会 #被写体モデル\n"
     "#ポートレート #portrait\n"
-    "#香乃ほのか"
+    "#香乃ほのか @b_palette_p"
 )
