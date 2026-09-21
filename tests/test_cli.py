@@ -1,4 +1,7 @@
+from datetime import datetime
+
 from note_auto_poster import cli
+from note_auto_poster.captions import X_CAPTION_EVENING, X_CAPTION_MORNING
 from note_auto_poster.config import Config
 from note_auto_poster.note_client import NoteArticle
 from note_auto_poster.state import PostedState
@@ -49,10 +52,13 @@ def test_run_picks_different_articles_for_x_and_instagram(tmp_path, monkeypatch)
     article_b = _article("b1", "記事B", 6)
     monkeypatch.setattr(cli.NoteClient, "fetch_recent_articles", lambda self, limit: [article_a, article_b])
     _stub_select_first_n(monkeypatch)
+    monkeypatch.setattr(cli.random, "choice", lambda seq: seq[0])
 
     posted_x = {}
     posted_ig = {}
-    monkeypatch.setattr(cli, "_post_to_x", lambda config, url: posted_x.setdefault("url", url) or "tweet1")
+    monkeypatch.setattr(
+        cli, "_post_to_x", lambda config, url, caption: posted_x.setdefault("url", url) or "tweet1"
+    )
     monkeypatch.setattr(
         cli, "_post_to_instagram", lambda config, urls: posted_ig.setdefault("urls", urls) or "media1"
     )
@@ -98,7 +104,7 @@ def test_run_skips_platform_when_disabled(tmp_path, monkeypatch):
     monkeypatch.setattr(cli.NoteClient, "fetch_recent_articles", lambda self, limit: [article_a])
     _stub_select_first_n(monkeypatch)
 
-    monkeypatch.setattr(cli, "_post_to_x", lambda config, url: "tweet1")
+    monkeypatch.setattr(cli, "_post_to_x", lambda config, url, caption: "tweet1")
 
     def _fail_if_called(*args, **kwargs):
         raise AssertionError("instagram posting should not happen when disabled")
@@ -143,3 +149,44 @@ def test_select_candidate_falls_back_to_last_used_if_no_alternative():
         candidates, exclude_article_keys=set(), last_article_key="a1", target_count=1
     )
     assert pick[0].key == "a1"
+
+
+def test_select_candidate_picks_randomly_among_all_eligible_articles(monkeypatch):
+    article_a = _article("a1", "記事A", 3)
+    article_b = _article("b1", "記事B", 3)
+    article_c = _article("c1", "記事C", 3)
+    candidates = [
+        (article_a, article_a.image_urls),
+        (article_b, article_b.image_urls),
+        (article_c, article_c.image_urls),
+    ]
+
+    seen_pools = []
+
+    def _record_choice(seq):
+        seen_pools.append(list(seq))
+        return seq[0]
+
+    monkeypatch.setattr(cli.random, "choice", _record_choice)
+
+    cli._select_candidate(candidates, exclude_article_keys=set(), last_article_key=None, target_count=1)
+
+    assert len(seen_pools[0]) == 3
+
+
+class _FakeDatetime:
+    def __init__(self, fixed):
+        self._fixed = fixed
+
+    def now(self, tz):
+        return self._fixed
+
+
+def test_current_x_caption_uses_morning_before_cutoff(monkeypatch):
+    monkeypatch.setattr(cli, "datetime", _FakeDatetime(datetime(2026, 1, 1, 6, 0, tzinfo=cli.JST)))
+    assert cli._current_x_caption() == X_CAPTION_MORNING
+
+
+def test_current_x_caption_uses_evening_after_cutoff(monkeypatch):
+    monkeypatch.setattr(cli, "datetime", _FakeDatetime(datetime(2026, 1, 1, 20, 0, tzinfo=cli.JST)))
+    assert cli._current_x_caption() == X_CAPTION_EVENING

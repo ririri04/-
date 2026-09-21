@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import argparse
 import logging
+import random
 import sys
 from dataclasses import replace
+from datetime import datetime
 from typing import List, Optional, Set, Tuple
+from zoneinfo import ZoneInfo
 
 import requests
 
-from .captions import INSTAGRAM_CAPTION, X_CAPTION
+from .captions import INSTAGRAM_CAPTION, X_CAPTION_EVENING, X_CAPTION_MORNING
 from .config import Config
 from .image_selector import ImageSelector
 from .instagram_poster import InstagramCredentials, InstagramPoster
@@ -18,8 +21,16 @@ from .x_poster import XCredentials, XPoster
 
 logger = logging.getLogger("note_auto_poster")
 
-INITIAL_FETCH_LIMIT = 20
+INITIAL_FETCH_LIMIT = 30
 MAX_FETCH_LIMIT = 200
+JST = ZoneInfo("Asia/Tokyo")
+# midpoint between the 06:00 and 20:00 JST scheduled runs
+MORNING_CUTOFF_HOUR = 13
+
+
+def _current_x_caption() -> str:
+    now_jst = datetime.now(JST)
+    return X_CAPTION_MORNING if now_jst.hour < MORNING_CUTOFF_HOUR else X_CAPTION_EVENING
 
 
 def run(config: Config) -> int:
@@ -96,12 +107,15 @@ def _select_candidate(
     fresh = [p for p in pool if p[0].key != last_article_key]
     search_pool = fresh or pool
 
-    # prefer an article that can fully satisfy the target count
+    # among articles that can fully satisfy the target count, pick randomly
+    # (rather than always the newest) so usage spreads across the archive
     full = [p for p in search_pool if len(p[1]) >= target_count]
     if full:
-        return full[0]
+        return random.choice(full)
 
-    return max(search_pool, key=lambda p: len(p[1]))
+    max_len = max(len(imgs) for _, imgs in search_pool)
+    best = [p for p in search_pool if len(p[1]) == max_len]
+    return random.choice(best)
 
 
 def _handle_x_post(
@@ -121,16 +135,17 @@ def _handle_x_post(
         return False
 
     logger.info("X用に記事「%s」(%s)から画像を選定しました: %s", article.title, article.key, chosen[0])
+    caption = _current_x_caption()
 
     if config.dry_run:
-        logger.info("[dry-run] X投稿予定: %s\nキャプション:\n%s", chosen[0], X_CAPTION)
+        logger.info("[dry-run] X投稿予定: %s\nキャプション:\n%s", chosen[0], caption)
         return False
 
     if not config.twitter_api_key:
         logger.info("X用の認証情報が未設定のためスキップします")
         return False
 
-    post_id = _post_to_x(config, chosen[0])
+    post_id = _post_to_x(config, chosen[0], caption)
     if post_id is None:
         return False
 
@@ -183,7 +198,7 @@ def _handle_instagram_post(
     return True
 
 
-def _post_to_x(config: Config, image_url: str) -> Optional[str]:
+def _post_to_x(config: Config, image_url: str, caption: str) -> Optional[str]:
     try:
         image_bytes = requests.get(image_url, timeout=15).content
         poster = XPoster(
@@ -194,7 +209,7 @@ def _post_to_x(config: Config, image_url: str) -> Optional[str]:
                 config.twitter_access_token_secret,
             )
         )
-        return poster.post_image(image_bytes, X_CAPTION)
+        return poster.post_image(image_bytes, caption)
     except Exception:
         logger.exception("failed to post to X")
         return None
