@@ -5,7 +5,7 @@ import logging
 import random
 import sys
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
 from typing import List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
@@ -16,6 +16,7 @@ from .config import Config
 from .image_selector import ImageSelector
 from .instagram_poster import InstagramCredentials, InstagramPoster
 from .note_client import NoteArticle, NoteClient
+from .sessions import session_key
 from .state import PostedState
 from .x_poster import XCredentials, XPoster
 
@@ -40,29 +41,38 @@ def run(config: Config) -> int:
 
     candidates = _gather_candidates(note_client, state)
 
+    today = datetime.now(JST).date()
+    recent_article_keys = state.get_recent_article_keys()
+    avoid_sessions = state.get_recent_session_keys(today, window_days=3)
+
     posted_count = 0
 
     x_pick = _select_candidate(
         candidates,
         exclude_article_keys=set(),
-        last_article_key=state.get_last_article_key("x"),
+        exclude_sessions=set(),
+        recent_article_keys=recent_article_keys,
+        avoid_sessions=avoid_sessions,
         target_count=1,
     )
     if config.post_to_x:
-        if _handle_x_post(x_pick, config, selector, state):
+        if _handle_x_post(x_pick, config, selector, state, today):
             posted_count += 1
     else:
         logger.info("POST_TO_X=false のためXへの投稿はスキップします")
 
-    ig_exclude = {x_pick[0].key} if x_pick else set()
+    ig_exclude_articles = {x_pick[0].key} if x_pick else set()
+    ig_exclude_sessions = {session_key(x_pick[0].title)} if x_pick else set()
     ig_pick = _select_candidate(
         candidates,
-        exclude_article_keys=ig_exclude,
-        last_article_key=state.get_last_article_key("instagram"),
+        exclude_article_keys=ig_exclude_articles,
+        exclude_sessions=ig_exclude_sessions,
+        recent_article_keys=recent_article_keys,
+        avoid_sessions=avoid_sessions,
         target_count=config.instagram_image_count,
     )
     if config.post_to_instagram:
-        if _handle_instagram_post(ig_pick, config, selector, state):
+        if _handle_instagram_post(ig_pick, config, selector, state, today):
             posted_count += 1
     else:
         logger.info("POST_TO_INSTAGRAM=false のためInstagramへの投稿はスキップします")
@@ -96,16 +106,35 @@ def _gather_candidates(
 def _select_candidate(
     candidates: List[Tuple[NoteArticle, List[str]]],
     exclude_article_keys: Set[str],
-    last_article_key: Optional[str],
+    exclude_sessions: Set[str],
+    recent_article_keys: List[str],
+    avoid_sessions: Set[str],
     target_count: int,
 ) -> Optional[Tuple[NoteArticle, List[str]]]:
-    pool = [(a, imgs) for a, imgs in candidates if a.key not in exclude_article_keys]
+    # hard exclusions: never pick these within this run (e.g. whatever the
+    # other platform just picked, so X and Instagram never share an article
+    # or an obviously-the-same-shoot session in one run)
+    pool = [
+        (a, imgs)
+        for a, imgs in candidates
+        if a.key not in exclude_article_keys and session_key(a.title) not in exclude_sessions
+    ]
     if not pool:
         return None
 
-    # prefer a different article than the one used last time for this platform
-    fresh = [p for p in pool if p[0].key != last_article_key]
-    search_pool = fresh or pool
+    # soft preferences, relaxed one at a time until something is left:
+    # 1) not a recently-used article AND not a recently-used session
+    # 2) not a recently-used session (a different article from the same
+    #    recent session is still fine here, just not preferred)
+    # 3) not a recently-used article
+    # 4) anything in the hard-filtered pool
+    tiers = [
+        [p for p in pool if p[0].key not in recent_article_keys and session_key(p[0].title) not in avoid_sessions],
+        [p for p in pool if session_key(p[0].title) not in avoid_sessions],
+        [p for p in pool if p[0].key not in recent_article_keys],
+        pool,
+    ]
+    search_pool = next((tier for tier in tiers if tier), pool)
 
     # among articles that can fully satisfy the target count, pick randomly
     # (rather than always the newest) so usage spreads across the archive
@@ -123,6 +152,7 @@ def _handle_x_post(
     config: Config,
     selector: ImageSelector,
     state: PostedState,
+    today: date,
 ) -> bool:
     if pick is None:
         logger.info("X用に投稿できる新しい画像が見つかりませんでした")
@@ -150,7 +180,8 @@ def _handle_x_post(
         return False
 
     state.mark_images_posted(chosen)
-    state.set_last_article_key("x", article.key)
+    state.record_article_use(article.key)
+    state.record_session_use(today, session_key(article.title))
     logger.info("posted to X: %s (記事「%s」)", post_id, article.title)
     return True
 
@@ -160,6 +191,7 @@ def _handle_instagram_post(
     config: Config,
     selector: ImageSelector,
     state: PostedState,
+    today: date,
 ) -> bool:
     if pick is None:
         logger.info("Instagram用に投稿できる新しい画像が見つかりませんでした")
@@ -193,7 +225,8 @@ def _handle_instagram_post(
         return False
 
     state.mark_images_posted(chosen)
-    state.set_last_article_key("instagram", article.key)
+    state.record_article_use(article.key)
+    state.record_session_use(today, session_key(article.title))
     logger.info("posted to Instagram: %s (記事「%s」)", post_id, article.title)
     return True
 

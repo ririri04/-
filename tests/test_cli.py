@@ -74,8 +74,7 @@ def test_run_picks_different_articles_for_x_and_instagram(tmp_path, monkeypatch)
     assert state.is_image_posted(article_a.image_urls[0])
     for url in article_b.image_urls[:5]:
         assert state.is_image_posted(url)
-    assert state.get_last_article_key("x") == "a1"
-    assert state.get_last_article_key("instagram") == "b1"
+    assert set(state.get_recent_article_keys()) == {"a1", "b1"}
 
 
 def test_dry_run_does_not_post_or_update_state(tmp_path, monkeypatch):
@@ -96,7 +95,7 @@ def test_dry_run_does_not_post_or_update_state(tmp_path, monkeypatch):
     assert count == 0
     state = PostedState(config.state_file)
     assert not state.is_image_posted(article_a.image_urls[0])
-    assert state.get_last_article_key("x") is None
+    assert state.get_recent_article_keys() == []
 
 
 def test_run_skips_platform_when_disabled(tmp_path, monkeypatch):
@@ -130,25 +129,57 @@ def test_run_returns_zero_when_no_unused_images(tmp_path, monkeypatch):
     assert count == 0
 
 
-def test_select_candidate_prefers_different_article_than_last_used():
+def _select(candidates, **overrides):
+    kwargs = dict(
+        exclude_article_keys=set(),
+        exclude_sessions=set(),
+        recent_article_keys=[],
+        avoid_sessions=set(),
+        target_count=1,
+    )
+    kwargs.update(overrides)
+    return cli._select_candidate(candidates, **kwargs)
+
+
+def test_select_candidate_prefers_article_not_in_recent_history():
     article_a = _article("a1", "記事A", 3)
     article_b = _article("b1", "記事B", 3)
     candidates = [(article_a, article_a.image_urls), (article_b, article_b.image_urls)]
 
-    pick = cli._select_candidate(
-        candidates, exclude_article_keys=set(), last_article_key="a1", target_count=1
-    )
+    pick = _select(candidates, recent_article_keys=["a1"])
     assert pick[0].key == "b1"
 
 
-def test_select_candidate_falls_back_to_last_used_if_no_alternative():
+def test_select_candidate_falls_back_to_recent_if_no_alternative():
     article_a = _article("a1", "記事A", 3)
     candidates = [(article_a, article_a.image_urls)]
 
-    pick = cli._select_candidate(
-        candidates, exclude_article_keys=set(), last_article_key="a1", target_count=1
-    )
+    pick = _select(candidates, recent_article_keys=["a1"])
     assert pick[0].key == "a1"
+
+
+def test_select_candidate_avoids_recent_session_across_different_articles():
+    article_a = _article("a1", "夜撮影会 その①", 3)
+    article_b = _article("b1", "夜撮影会 その②", 3)
+    article_c = _article("c1", "BBQ撮影会", 3)
+    candidates = [
+        (article_a, article_a.image_urls),
+        (article_b, article_b.image_urls),
+        (article_c, article_c.image_urls),
+    ]
+
+    # "夜撮影会" was used recently (different article, same session/outfit)
+    pick = _select(candidates, avoid_sessions={"夜撮影会"})
+    assert pick[0].key == "c1"
+
+
+def test_select_candidate_hard_excludes_session_used_by_other_platform_this_run():
+    article_a = _article("a1", "夜撮影会 その①", 3)
+    article_b = _article("b1", "夜撮影会 その②", 3)
+    candidates = [(article_a, article_a.image_urls), (article_b, article_b.image_urls)]
+
+    pick = _select(candidates, exclude_sessions={"夜撮影会"})
+    assert pick is None
 
 
 def test_select_candidate_picks_randomly_among_all_eligible_articles(monkeypatch):
@@ -169,7 +200,7 @@ def test_select_candidate_picks_randomly_among_all_eligible_articles(monkeypatch
 
     monkeypatch.setattr(cli.random, "choice", _record_choice)
 
-    cli._select_candidate(candidates, exclude_article_keys=set(), last_article_key=None, target_count=1)
+    _select(candidates)
 
     assert len(seen_pools[0]) == 3
 

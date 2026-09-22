@@ -14,9 +14,12 @@ X (Twitter) と Instagram に自動投稿するツールです。
 3. **XPoster** — Xには1枚、固定のキャプションで投稿します(`src/note_auto_poster/captions.py`)。
 4. **InstagramPoster** — Instagramには同一記事から複数枚(デフォルト5枚)をカルーセル投稿します。
 5. **PostedState** — **投稿済みの画像URL**を `state.json` に記録し、同じ写真は二度と使いません
-   (記事自体は再利用OK)。また、X/Instagramそれぞれで「前回使った記事」を記録し、
+   (記事自体は再利用OK)。また、X/Instagram合わせて直近に使った記事(最大6件)を記録し、
    できるだけ連続で同じ記事にならないようにします。
 6. X用とInstagram用は、同じ実行の中で必ず別の記事から選ばれます。
+7. **sessions.py** — 「夜撮影会 その④」「夜撮影会 その⑤」のように、記事タイトルの
+   「その◯」を除いた部分を「撮影会(セッション)」の単位として扱います。同じ撮影会
+   (=同じ衣装)は、当日を含む直近3日間は別の投稿と被らないようにします。
 
 `note_auto_poster run` を定期実行(cron や GitHub Actions)することで、1日数回自動で
 SNS投稿が行われます。キャプション文言は `src/note_auto_poster/captions.py` の
