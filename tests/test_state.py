@@ -1,4 +1,5 @@
 import json
+from datetime import date
 
 from note_auto_poster.state import PostedState
 
@@ -38,22 +39,47 @@ def test_mark_images_posted_does_not_duplicate(tmp_path):
     ]
 
 
-def test_last_article_key_per_platform(tmp_path):
+def test_recent_article_keys_tracks_combined_history_capped(tmp_path):
     state = PostedState(str(tmp_path / "state.json"))
-    assert state.get_last_article_key("x") is None
+    assert state.get_recent_article_keys() == []
 
-    state.set_last_article_key("x", "abc123")
-    state.set_last_article_key("instagram", "def456")
+    for i in range(8):
+        state.record_article_use(f"a{i}")
 
-    assert state.get_last_article_key("x") == "abc123"
-    assert state.get_last_article_key("instagram") == "def456"
+    # capped at RECENT_ARTICLE_HISTORY (6), oldest entries dropped
+    assert state.get_recent_article_keys() == ["a2", "a3", "a4", "a5", "a6", "a7"]
 
     reloaded = PostedState(str(tmp_path / "state.json"))
-    assert reloaded.get_last_article_key("x") == "abc123"
-    assert reloaded.get_last_article_key("instagram") == "def456"
+    assert reloaded.get_recent_article_keys() == ["a2", "a3", "a4", "a5", "a6", "a7"]
 
 
-def test_migrates_old_schema(tmp_path):
+def test_session_history_window(tmp_path):
+    state = PostedState(str(tmp_path / "state.json"))
+    today = date(2026, 1, 10)
+
+    state.record_session_use(today, "夜撮影会")
+    state.record_session_use(date(2026, 1, 8), "BBQ撮影会")
+    state.record_session_use(date(2026, 1, 1), "制服撮影会")  # outside a 3-day window
+
+    recent = state.get_recent_session_keys(today, window_days=3)
+    assert recent == {"夜撮影会", "BBQ撮影会"}
+
+
+def test_migrates_intermediate_last_article_key_schema(tmp_path):
+    path = tmp_path / "state.json"
+    old_schema = {
+        "posted_image_urls": ["https://example.com/old.png"],
+        "last_article_key": {"x": "abc123", "instagram": "def456"},
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(old_schema, f)
+
+    state = PostedState(str(path))
+    assert state.is_image_posted("https://example.com/old.png")
+    assert set(state.get_recent_article_keys()) == {"abc123", "def456"}
+
+
+def test_migrates_oldest_posted_articles_schema(tmp_path):
     path = tmp_path / "state.json"
     old_schema = {
         "posted_articles": {
@@ -70,4 +96,4 @@ def test_migrates_old_schema(tmp_path):
 
     state = PostedState(str(path))
     assert state.is_image_posted("https://example.com/old.png")
-    assert state.get_last_article_key("x") is None
+    assert state.get_recent_article_keys() == []
