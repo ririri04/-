@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import List, Optional
 
 import requests
 from requests_oauthlib import OAuth1
@@ -9,6 +9,7 @@ from requests_oauthlib import OAuth1
 UPLOAD_URL = "https://upload.twitter.com/1.1/media/upload.json"
 TWEET_URL = "https://api.twitter.com/2/tweets"
 MAX_CAPTION_LEN = 280
+MAX_MEDIA_PER_TWEET = 4
 
 
 @dataclass
@@ -20,10 +21,11 @@ class XCredentials:
 
 
 class XPoster:
-    """Posts an image + caption to X using OAuth1.0a user-context credentials.
+    """Posts one or more images + a caption to X using OAuth1.0a
+    user-context credentials.
 
     Media upload still requires the v1.1 endpoint; the tweet itself is
-    created through the v2 endpoint referencing the uploaded media id.
+    created through the v2 endpoint referencing the uploaded media ids.
     """
 
     def __init__(self, credentials: XCredentials, session: Optional[requests.Session] = None):
@@ -36,11 +38,19 @@ class XPoster:
         )
 
     def post_image(self, image_bytes: bytes, caption: str) -> str:
-        media_id = self._upload_media(image_bytes)
+        return self.post_images([image_bytes], caption)
+
+    def post_images(self, image_bytes_list: List[bytes], caption: str) -> str:
+        if not image_bytes_list:
+            raise ValueError("at least one image is required")
+        if len(image_bytes_list) > MAX_MEDIA_PER_TWEET:
+            raise ValueError(f"X allows at most {MAX_MEDIA_PER_TWEET} images per tweet")
+
+        media_ids = [self._upload_media(b) for b in image_bytes_list]
         text = caption[:MAX_CAPTION_LEN]
         resp = self.session.post(
             TWEET_URL,
-            json={"text": text, "media": {"media_ids": [media_id]}},
+            json={"text": text, "media": {"media_ids": media_ids}},
             auth=self._auth,
             timeout=30,
         )

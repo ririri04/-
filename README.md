@@ -11,8 +11,11 @@ X (Twitter) と Instagram に自動投稿するツールです。
 2. **ImageSelector** — 取得した画像候補と記事タイトル/概要を Claude (Vision) に渡し、
    視覚的な魅力・内容との関連性・ネタバレ回避などの観点で写真を選定します。
    `ANTHROPIC_API_KEY` 未設定の場合は先頭の画像を使う簡易フォールバックで動作します。
-3. **XPoster** — Xには1枚、固定のキャプションで投稿します(`src/note_auto_poster/captions.py`)。
-4. **InstagramPoster** — Instagramには同一記事から複数枚(デフォルト5枚)をカルーセル投稿します。
+3. **XPoster** — Xには**朝の実行のみ**、同一記事から**アスペクト比が同じ写真を2枚**選んで
+   1つの投稿にまとめます(夜の実行ではXには投稿しません)。`aspect_ratio.py` が画像の縦横比を
+   判定し、同じ比率の写真が2枚以上ある記事だけがX投稿の候補になります。
+4. **InstagramPoster** — Instagramには朝・夜とも、同一記事から複数枚(デフォルト5枚)を
+   カルーセル投稿します。
 5. **PostedState** — **投稿済みの画像URL**を `state.json` に記録し、同じ写真は二度と使いません
    (記事自体は再利用OK)。また、X/Instagram合わせて直近に使った記事(最大6件)を記録し、
    できるだけ連続で同じ記事にならないようにします。
@@ -95,9 +98,9 @@ PYTHONPATH=src python -m note_auto_poster.cli run
 ### 5. 自動実行(GitHub Actions)
 
 `.github/workflows/auto-post.yml` が毎日 **6:00 と 20:00(日本時間)** の1日2回 `run` を
-実行します。リポジトリの Settings → Secrets and variables → Actions に、上記の環境変数と
-同名のシークレットを登録してください。実行のたびに `state.json` をコミットして
-投稿済み状態を永続化します。
+実行します(Instagramは両方、Xは6:00の実行のみ投稿します)。リポジトリの
+Settings → Secrets and variables → Actions に、上記の環境変数と同名のシークレットを
+登録してください。実行のたびに `state.json` をコミットして投稿済み状態を永続化します。
 
 ### キャプションを変更したい場合
 

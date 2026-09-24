@@ -11,7 +11,8 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-from .captions import INSTAGRAM_CAPTION, X_CAPTION_EVENING, X_CAPTION_MORNING
+from .aspect_ratio import best_matching_group
+from .captions import INSTAGRAM_CAPTION, X_CAPTION_MORNING
 from .config import Config
 from .image_selector import ImageSelector
 from .instagram_poster import InstagramCredentials, InstagramPoster
@@ -27,11 +28,12 @@ MAX_FETCH_LIMIT = 200
 JST = ZoneInfo("Asia/Tokyo")
 # midpoint between the 06:00 and 20:00 JST scheduled runs
 MORNING_CUTOFF_HOUR = 13
+# X posts a same-aspect-ratio pair from a single article, mornings only
+X_IMAGE_COUNT = 2
 
 
-def _current_x_caption() -> str:
-    now_jst = datetime.now(JST)
-    return X_CAPTION_MORNING if now_jst.hour < MORNING_CUTOFF_HOUR else X_CAPTION_EVENING
+def _is_morning() -> bool:
+    return datetime.now(JST).hour < MORNING_CUTOFF_HOUR
 
 
 def run(config: Config) -> int:
@@ -47,17 +49,24 @@ def run(config: Config) -> int:
 
     posted_count = 0
 
-    x_pick = _select_candidate(
-        candidates,
-        exclude_article_keys=set(),
-        exclude_sessions=set(),
-        recent_article_keys=recent_article_keys,
-        avoid_sessions=avoid_sessions,
-        target_count=1,
-    )
+    x_pick = None
+    if _is_morning():
+        x_candidates = _gather_x_pair_candidates(candidates)
+        x_pick = _select_candidate(
+            x_candidates,
+            exclude_article_keys=set(),
+            exclude_sessions=set(),
+            recent_article_keys=recent_article_keys,
+            avoid_sessions=avoid_sessions,
+            target_count=X_IMAGE_COUNT,
+        )
+
     if config.post_to_x:
-        if _handle_x_post(x_pick, config, selector, state, today):
-            posted_count += 1
+        if _is_morning():
+            if _handle_x_post(x_pick, config, selector, state, today):
+                posted_count += 1
+        else:
+            logger.info("Xは朝のみ投稿するため、夜間の実行はスキップします")
     else:
         logger.info("POST_TO_X=false のためXへの投稿はスキップします")
 
@@ -101,6 +110,20 @@ def _gather_candidates(
         if len(candidates) >= 2 or reached_end_of_account or limit >= MAX_FETCH_LIMIT:
             return candidates
         limit *= 2
+
+
+def _gather_x_pair_candidates(
+    candidates: List[Tuple[NoteArticle, List[str]]]
+) -> List[Tuple[NoteArticle, List[str]]]:
+    """Narrows each article's unused images down to its largest same-aspect-
+    -ratio group, keeping only articles that can offer at least X_IMAGE_COUNT
+    same-ratio photos (so the two posted together look consistent)."""
+    result = []
+    for article, unused in candidates:
+        group = best_matching_group(unused, min_size=X_IMAGE_COUNT)
+        if group:
+            result.append((article, group))
+    return result
 
 
 def _select_candidate(
@@ -158,24 +181,26 @@ def _handle_x_post(
         logger.info("X用に投稿できる新しい画像が見つかりませんでした")
         return False
 
-    article, unused_images = pick
-    chosen = selector.select(article.title, article.excerpt, unused_images, article.url, count=1)
-    if not chosen:
+    article, ratio_matched_images = pick
+    chosen = selector.select(
+        article.title, article.excerpt, ratio_matched_images, article.url, count=X_IMAGE_COUNT
+    )
+    if len(chosen) < X_IMAGE_COUNT:
         logger.info("X用の画像選定に失敗しました(記事「%s」 / %s)", article.title, article.key)
         return False
 
-    logger.info("X用に記事「%s」(%s)から画像を選定しました: %s", article.title, article.key, chosen[0])
-    caption = _current_x_caption()
+    logger.info("X用に記事「%s」(%s)から%d枚選定しました: %s", article.title, article.key, len(chosen), chosen)
+    caption = X_CAPTION_MORNING
 
     if config.dry_run:
-        logger.info("[dry-run] X投稿予定: %s\nキャプション:\n%s", chosen[0], caption)
+        logger.info("[dry-run] X投稿予定: %s\nキャプション:\n%s", chosen, caption)
         return False
 
     if not config.twitter_api_key:
         logger.info("X用の認証情報が未設定のためスキップします")
         return False
 
-    post_id = _post_to_x(config, chosen[0], caption)
+    post_id = _post_to_x(config, chosen, caption)
     if post_id is None:
         return False
 
@@ -231,9 +256,9 @@ def _handle_instagram_post(
     return True
 
 
-def _post_to_x(config: Config, image_url: str, caption: str) -> Optional[str]:
+def _post_to_x(config: Config, image_urls: List[str], caption: str) -> Optional[str]:
     try:
-        image_bytes = requests.get(image_url, timeout=15).content
+        image_bytes_list = [requests.get(url, timeout=15).content for url in image_urls]
         poster = XPoster(
             XCredentials(
                 config.twitter_api_key,
@@ -242,7 +267,7 @@ def _post_to_x(config: Config, image_url: str, caption: str) -> Optional[str]:
                 config.twitter_access_token_secret,
             )
         )
-        return poster.post_image(image_bytes, caption)
+        return poster.post_images(image_bytes_list, caption)
     except Exception:
         logger.exception("failed to post to X")
         return None
@@ -274,7 +299,9 @@ def main(argv=None) -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    run_parser = sub.add_parser("run", help="Xに1枚、Instagramに複数枚(別記事から)投稿する")
+    run_parser = sub.add_parser(
+        "run", help="Xに2枚組(朝のみ)、Instagramに複数枚(別記事から)投稿する"
+    )
     run_parser.add_argument(
         "--dry-run", action="store_true", help="実際には投稿せず選定結果のみ表示する"
     )

@@ -1,7 +1,6 @@
 from datetime import datetime
 
 from note_auto_poster import cli
-from note_auto_poster.captions import X_CAPTION_EVENING, X_CAPTION_MORNING
 from note_auto_poster.config import Config
 from note_auto_poster.note_client import NoteArticle
 from note_auto_poster.state import PostedState
@@ -47,17 +46,29 @@ def _stub_select_first_n(monkeypatch):
     )
 
 
+def _stub_all_images_same_ratio(monkeypatch):
+    """Treats every candidate's images as sharing one aspect ratio, so X's
+    pair-selection doesn't make real network calls in tests."""
+    monkeypatch.setattr(
+        cli,
+        "best_matching_group",
+        lambda urls, min_size=2: list(urls) if len(urls) >= min_size else [],
+    )
+
+
 def test_run_picks_different_articles_for_x_and_instagram(tmp_path, monkeypatch):
     article_a = _article("a1", "記事A", 3)
     article_b = _article("b1", "記事B", 6)
     monkeypatch.setattr(cli.NoteClient, "fetch_recent_articles", lambda self, limit: [article_a, article_b])
     _stub_select_first_n(monkeypatch)
+    _stub_all_images_same_ratio(monkeypatch)
+    monkeypatch.setattr(cli, "_is_morning", lambda: True)
     monkeypatch.setattr(cli.random, "choice", lambda seq: seq[0])
 
     posted_x = {}
     posted_ig = {}
     monkeypatch.setattr(
-        cli, "_post_to_x", lambda config, url, caption: posted_x.setdefault("url", url) or "tweet1"
+        cli, "_post_to_x", lambda config, urls, caption: posted_x.setdefault("urls", urls) or "tweet1"
     )
     monkeypatch.setattr(
         cli, "_post_to_instagram", lambda config, urls: posted_ig.setdefault("urls", urls) or "media1"
@@ -67,14 +78,34 @@ def test_run_picks_different_articles_for_x_and_instagram(tmp_path, monkeypatch)
     count = cli.run(config)
 
     assert count == 2
-    assert posted_x["url"] == article_a.image_urls[0]
+    assert posted_x["urls"] == article_a.image_urls[:2]
     assert posted_ig["urls"] == article_b.image_urls[:5]
 
     state = PostedState(config.state_file)
-    assert state.is_image_posted(article_a.image_urls[0])
+    for url in article_a.image_urls[:2]:
+        assert state.is_image_posted(url)
     for url in article_b.image_urls[:5]:
         assert state.is_image_posted(url)
     assert set(state.get_recent_article_keys()) == {"a1", "b1"}
+
+
+def test_run_skips_x_in_the_evening(tmp_path, monkeypatch):
+    article_a = _article("a1", "記事A", 3)
+    monkeypatch.setattr(cli.NoteClient, "fetch_recent_articles", lambda self, limit: [article_a])
+    _stub_select_first_n(monkeypatch)
+    _stub_all_images_same_ratio(monkeypatch)
+    monkeypatch.setattr(cli, "_is_morning", lambda: False)
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("X posting should not happen in the evening")
+
+    monkeypatch.setattr(cli, "_post_to_x", _fail_if_called)
+    monkeypatch.setattr(cli, "_post_to_instagram", lambda config, urls: "media1")
+
+    config = _make_config(tmp_path, dry_run=False)
+    count = cli.run(config)
+
+    assert count == 1  # only Instagram posted
 
 
 def test_dry_run_does_not_post_or_update_state(tmp_path, monkeypatch):
@@ -82,6 +113,8 @@ def test_dry_run_does_not_post_or_update_state(tmp_path, monkeypatch):
     article_b = _article("b1", "記事B", 6)
     monkeypatch.setattr(cli.NoteClient, "fetch_recent_articles", lambda self, limit: [article_a, article_b])
     _stub_select_first_n(monkeypatch)
+    _stub_all_images_same_ratio(monkeypatch)
+    monkeypatch.setattr(cli, "_is_morning", lambda: True)
 
     def _fail_if_called(*args, **kwargs):
         raise AssertionError("posting should not happen during dry-run")
@@ -102,8 +135,10 @@ def test_run_skips_platform_when_disabled(tmp_path, monkeypatch):
     article_a = _article("a1", "記事A", 3)
     monkeypatch.setattr(cli.NoteClient, "fetch_recent_articles", lambda self, limit: [article_a])
     _stub_select_first_n(monkeypatch)
+    _stub_all_images_same_ratio(monkeypatch)
+    monkeypatch.setattr(cli, "_is_morning", lambda: True)
 
-    monkeypatch.setattr(cli, "_post_to_x", lambda config, url, caption: "tweet1")
+    monkeypatch.setattr(cli, "_post_to_x", lambda config, urls, caption: "tweet1")
 
     def _fail_if_called(*args, **kwargs):
         raise AssertionError("instagram posting should not happen when disabled")
@@ -120,6 +155,8 @@ def test_run_returns_zero_when_no_unused_images(tmp_path, monkeypatch):
     article_a = _article("a1", "記事A", 1)
     monkeypatch.setattr(cli.NoteClient, "fetch_recent_articles", lambda self, limit: [article_a])
     _stub_select_first_n(monkeypatch)
+    _stub_all_images_same_ratio(monkeypatch)
+    monkeypatch.setattr(cli, "_is_morning", lambda: True)
 
     config = _make_config(tmp_path, dry_run=False)
     state = PostedState(config.state_file)
@@ -127,6 +164,24 @@ def test_run_returns_zero_when_no_unused_images(tmp_path, monkeypatch):
 
     count = cli.run(config)
     assert count == 0
+
+
+def test_gather_x_pair_candidates_drops_articles_without_a_ratio_pair(monkeypatch):
+    article_a = _article("a1", "記事A", 3)
+    article_b = _article("b1", "記事B", 3)
+    candidates = [(article_a, article_a.image_urls), (article_b, article_b.image_urls)]
+
+    def _fake_best_matching_group(urls, min_size=2):
+        if urls is article_a.image_urls:
+            return urls[:2]
+        return []
+
+    monkeypatch.setattr(cli, "best_matching_group", _fake_best_matching_group)
+
+    result = cli._gather_x_pair_candidates(candidates)
+
+    assert [a.key for a, _ in result] == ["a1"]
+    assert result[0][1] == article_a.image_urls[:2]
 
 
 def _select(candidates, **overrides):
@@ -205,19 +260,21 @@ def test_select_candidate_picks_randomly_among_all_eligible_articles(monkeypatch
     assert len(seen_pools[0]) == 3
 
 
-class _FakeDatetime:
-    def __init__(self, fixed):
-        self._fixed = fixed
+def test_is_morning_true_before_cutoff(monkeypatch):
+    class _FakeDatetime:
+        @staticmethod
+        def now(tz):
+            return datetime(2026, 1, 1, 6, 0, tzinfo=cli.JST)
 
-    def now(self, tz):
-        return self._fixed
-
-
-def test_current_x_caption_uses_morning_before_cutoff(monkeypatch):
-    monkeypatch.setattr(cli, "datetime", _FakeDatetime(datetime(2026, 1, 1, 6, 0, tzinfo=cli.JST)))
-    assert cli._current_x_caption() == X_CAPTION_MORNING
+    monkeypatch.setattr(cli, "datetime", _FakeDatetime)
+    assert cli._is_morning() is True
 
 
-def test_current_x_caption_uses_evening_after_cutoff(monkeypatch):
-    monkeypatch.setattr(cli, "datetime", _FakeDatetime(datetime(2026, 1, 1, 20, 0, tzinfo=cli.JST)))
-    assert cli._current_x_caption() == X_CAPTION_EVENING
+def test_is_morning_false_after_cutoff(monkeypatch):
+    class _FakeDatetime:
+        @staticmethod
+        def now(tz):
+            return datetime(2026, 1, 1, 20, 0, tzinfo=cli.JST)
+
+    monkeypatch.setattr(cli, "datetime", _FakeDatetime)
+    assert cli._is_morning() is False
