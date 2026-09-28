@@ -66,7 +66,7 @@ class InstagramPoster:
         if is_carousel_item:
             data["is_carousel_item"] = "true"
         resp = self.session.post(url, data=data, timeout=30)
-        resp.raise_for_status()
+        _raise_for_status_with_body(resp)
         return resp.json()["id"]
 
     def _create_carousel_container(self, child_ids: list[str], caption: str) -> str:
@@ -81,7 +81,7 @@ class InstagramPoster:
             },
             timeout=30,
         )
-        resp.raise_for_status()
+        _raise_for_status_with_body(resp)
         return resp.json()["id"]
 
     def _wait_until_ready(self, creation_id: str) -> None:
@@ -92,7 +92,7 @@ class InstagramPoster:
                 params={"fields": "status_code", "access_token": self.credentials.access_token},
                 timeout=15,
             )
-            resp.raise_for_status()
+            _raise_for_status_with_body(resp)
             status = resp.json().get("status_code")
             if status == "FINISHED":
                 return
@@ -111,5 +111,14 @@ class InstagramPoster:
             data={"creation_id": creation_id, "access_token": self.credentials.access_token},
             timeout=30,
         )
-        resp.raise_for_status()
+        _raise_for_status_with_body(resp)
         return resp.json()["id"]
+
+
+def _raise_for_status_with_body(resp: requests.Response) -> None:
+    """Like resp.raise_for_status(), but logs the response body first --
+    Meta's error detail (which field/what went wrong) is in the JSON body,
+    and gets lost if only the bare HTTPError (status + reason) is logged."""
+    if resp.status_code >= 400:
+        logger.error("Instagram API error %s for %s: %s", resp.status_code, resp.url, resp.text)
+    resp.raise_for_status()

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import List, Optional
 
 import requests
 from requests_oauthlib import OAuth1
+
+logger = logging.getLogger(__name__)
 
 UPLOAD_URL = "https://upload.twitter.com/1.1/media/upload.json"
 TWEET_URL = "https://api.twitter.com/2/tweets"
@@ -54,7 +57,7 @@ class XPoster:
             auth=self._auth,
             timeout=30,
         )
-        resp.raise_for_status()
+        _raise_for_status_with_body(resp)
         return resp.json()["data"]["id"]
 
     def _upload_media(self, image_bytes: bytes) -> str:
@@ -64,5 +67,13 @@ class XPoster:
             auth=self._auth,
             timeout=30,
         )
-        resp.raise_for_status()
+        _raise_for_status_with_body(resp)
         return resp.json()["media_id_string"]
+
+
+def _raise_for_status_with_body(resp: requests.Response) -> None:
+    """Like resp.raise_for_status(), but logs the response body first, so
+    X's error detail isn't lost behind a bare status-code exception."""
+    if resp.status_code >= 400:
+        logger.error("X API error %s for %s: %s", resp.status_code, resp.url, resp.text)
+    resp.raise_for_status()
